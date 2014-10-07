@@ -76,6 +76,12 @@
        (+ points)
        (format "%.0f")))
 
+(defn label->name
+  [label]
+  (-> (name label)
+      (subs (.length *label-prefix*))
+      (clojure.string/replace #"\-" " ")))
+
 (defn map-count [map record]
   (for [x (:labeld record)]
     (assoc map key (inc (get map key 0)))))
@@ -106,7 +112,7 @@
        flatten
        (filter #(.startsWith (:name %) *label-prefix*))
        (reduce #(assoc %1 (:name %2) (+ (:name %1 0) (:estimate %2))) {})
-       (map #(hash-map (key %) (points->hours (val %))))
+       (map #(hash-map (label->name (key %)) (points->hours (val %))))
        (into {})))
 
 (defn process-date
