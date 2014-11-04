@@ -111,7 +111,7 @@
                   (:labels %)))
        flatten
        (filter #(.startsWith (:name %) *label-prefix*))
-       (reduce #(assoc %1 (:name %2) (+ (:name %1 0) (if (nil? (:estimate %2)) 1 (:estimate %2)))) {})
+       (reduce #(assoc %1 (:name %2) (+ (get %1 (:name %2) 0) (if (nil? (:estimate %2)) 1 (:estimate %2)))) {})
        (map #(hash-map (label->name (key %)) (points->hours (val %))))
        (into {})))
 
