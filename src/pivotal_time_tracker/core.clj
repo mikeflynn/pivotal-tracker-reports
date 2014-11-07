@@ -28,11 +28,11 @@
   (let [url (str "https://www.pivotaltracker.com/services/v5/projects/" project-id "/stories")
         params {:with_label label
                 :with_state state
-                :updated_after (when start (time/datetime->epoch (apply time/datetime start)))
-                :updated_before (when end (time/datetime->epoch (apply time/datetime end)))
+                :accepted_after (when start (time/datetime->epoch (apply time/datetime start)))
+                :accepted_before (when end (time/datetime->epoch (apply time/datetime end)))
                 :limit limit
                 :offset offset
-                :fields "id,project_id,labels,story_type,current_state,name,estimate"}
+                :fields "id,project_id,labels,story_type,current_state,name,estimate,owners"}
         headers {"X-TrackerToken" token}
         response (http/get url {:query-params (clean-params params)
                                 :headers headers
@@ -95,9 +95,7 @@
 
 (defn data->csv
   [filename data]
-  (let [rows (->> data
-                  (map #(vector (key %) (val %)))
-                  (into [["Project" "Hours"]]))]
+  (let [rows (into [["Project" "Employee" "Hours"]] data)]
     (with-open [out-file (io/writer filename)]
       (csv/write-csv out-file rows))))
 
@@ -107,13 +105,16 @@
        (map #(get-tickets :project-id % :start start :end end))
        flatten
        (map #(map (fn [x] (assoc x :estimate (:estimate %)
-                                   :ticket-id (:id %)))
+                                   :ticket-id (:id %)
+                                   :owner (->> (:owners %)
+                                               first
+                                               ((fn [x] (:name x 0))))))
                   (:labels %)))
        flatten
        (filter #(.startsWith (:name %) *label-prefix*))
-       (reduce #(assoc %1 (:name %2) (+ (get %1 (:name %2) 0) (if (nil? (:estimate %2)) 1 (:estimate %2)))) {})
-       (map #(hash-map (label->name (key %)) (points->hours (val %))))
-       (into {})))
+       (reduce #(assoc-in %1 [(keyword (:name %2)) (keyword (str (:owner %2)))] (+ (get-in %1 [(keyword (:name %2)) (keyword (str (:owner %2)))] 0) (if (nil? (:estimate %2)) 1 (:estimate %2)))) {})
+       (map #(into [] (map (fn [x] (vector (name (key %)) (name (key x)) (val x))) (val %))))
+       (reduce into [])))
 
 (defn process-date
   [datestr]
@@ -141,14 +142,22 @@
     :default nil
     :validate [#(contains? #{"csv"} (last (clojure.string/split % #"\."))) "Must be .csv file."]]])
 
+(defn set-prefix
+  [prefix]
+  (alter-var-root (var *label-prefix*) (fn [_] prefix)))
+
+(defn set-verbose
+  [v]
+  (alter-var-root (var *verbose*) (fn [_] v)))
+
 (defn -main [& args]
   (let [opts (parse-opts args cli-options)
         flags (:options opts)]
     (when (:errors opts)
           (do (println (:errors opts))
               (System/exit 0)))
-    (alter-var-root (var *label-prefix*) (fn [_] (:prefix flags)))
-    (alter-var-root (var *verbose*) (fn [_] (:verbose flags)))
+    (set-prefix (:prefix flags))
+    (set-verbose (:verbose flags))
     (if (:help flags)
         (do (println (:summary opts))
             (System/exit 0))
