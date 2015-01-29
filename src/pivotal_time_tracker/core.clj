@@ -104,7 +104,7 @@
   (->> project-ids
        (map #(get-tickets :project-id % :start start :end end))
        flatten
-       (map #(map (fn [x] (assoc x :estimate (:estimate %)
+       (map #(map (fn [x] (assoc x :estimate (points->hours (:estimate %))
                                    :ticket-id (:id %)
                                    :owner (->> (:owners %)
                                                first
