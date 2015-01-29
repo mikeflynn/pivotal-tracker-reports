@@ -104,7 +104,7 @@
   (->> project-ids
        (map #(get-tickets :project-id % :start start :end end))
        flatten
-       (map #(map (fn [x] (assoc x :estimate (points->hours (:estimate %))
+       (map #(map (fn [x] (assoc x :estimate (:estimate %)
                                    :ticket-id (:id %)
                                    :owner (->> (:owners %)
                                                first
@@ -114,7 +114,8 @@
        (filter #(.startsWith (:name %) *label-prefix*))
        (reduce #(assoc-in %1 [(keyword (:name %2)) (keyword (str (:owner %2)))] (+ (get-in %1 [(keyword (:name %2)) (keyword (str (:owner %2)))] 0) (if (nil? (:estimate %2)) 1 (:estimate %2)))) {})
        (map #(into [] (map (fn [x] (vector (name (key %)) (name (key x)) (val x))) (val %))))
-       (reduce into [])))
+       (reduce into [])
+       (map #(vector (first %) (second %) (points->hours (nth % 2))))))
 
 (defn process-date
   [datestr]
