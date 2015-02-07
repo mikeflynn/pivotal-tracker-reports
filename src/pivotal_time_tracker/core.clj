@@ -8,7 +8,7 @@
             [simple-time.core :as time]))
 
 (def token "a2a78107444c396b83864db22e31231c")
-(def project-ids [1114116, 1114928, 908458])
+(def all-project-ids [1114116, 1114928, 908458])
 
 (def #^{:dynamic true} *label-prefix* "tt-")
 (def #^{:dynamic true} *verbose* false)
@@ -70,6 +70,64 @@
                       return))))
           (catch Exception e {:error (.getMessage e)})))))
 
+(defn get-iterations
+  [& {:keys [project-id offset label limit scope retries]
+      :or {offset 0 limit 5 scope "done" retries 0}}]
+  (when (nil? project-id) (throw (Exception. "Missing project-id.")))
+  (let [url (str "https://www.pivotaltracker.com/services/v5/projects/" project-id "/iterations")
+        params {:label label
+                :offset offset
+                :limit limit
+                :scope scope}
+        headers {"X-TrackerToken" token}
+        response (http/get url {:query-params (clean-params params)
+                                :headers headers
+                                :timeout 2000})]
+    (if (not= 200 (:status @response))
+        (if (< retries 0)
+            (do
+              (alert (str "Error response from " url ". Re-trying..."))
+              (get-tickets :retries (+ retries 1)
+                           :label label
+                           :offset offset
+                           :limit limit
+                           :scope scope))
+            (do
+              (alert "Max retries hit. Request failed.")
+              {:error (get (:body @response) "error")}))
+        (try
+          (let [body (-> (:body @response)
+                         (json/parse-string true))]
+            (if (:error body)
+                (throw (Exception. (or (get-in body [:error :message]) "Error or blank response from API.")))
+                body))
+          (catch Exception e {:error (.getMessage e)})))))
+
+(defn get-project-roster
+  [project-id & {:keys [retries] :or {retries 0}}]
+  (when (nil? project-id) (throw (Exception. "Missing project-id.")))
+    (let [url (str "https://www.pivotaltracker.com/services/v5/projects/" project-id "/memberships")
+        params {}
+        headers {"X-TrackerToken" token}
+        response (http/get url {:query-params (clean-params params)
+                                :headers headers
+                                :timeout 2000})]
+    (if (not= 200 (:status @response))
+        (if (< retries 0)
+            (do
+              (alert (str "Error response from " url ". Re-trying..."))
+              (get-project-roster project-id :retries (+ retries 1)))
+            (do
+              (alert "Max retries hit. Request failed.")
+              {:error (get (:body @response) "error")}))
+        (try
+          (let [body (-> (:body @response)
+                         (json/parse-string true))]
+            (if (:error body)
+                (throw (Exception. (or (get-in body [:error :message]) "Error or blank response from API.")))
+                body))
+          (catch Exception e {:error (.getMessage e)})))))
+
 (defn points->hours
   [points]
   (->> (* points 0.625)
@@ -93,15 +151,68 @@
        (apply concat)
        doall))
 
+(defn md5
+  "Generate a md5 checksum for the given string"
+  [token]
+  (let [hash-bytes
+         (doto (java.security.MessageDigest/getInstance "MD5")
+               (.reset)
+               (.update (.getBytes token)))]
+       (.toString
+         (new java.math.BigInteger 1 (.digest hash-bytes)) ; Positive and the size of the number
+         16)))
+
+(defn get-color
+  [string]
+  (subs (md5 string) 0 6))
+
 (defn data->csv
   [filename data]
+  (io/make-parents filename)
   (let [rows (into [["Project" "Employee" "Hours"]] data)]
     (with-open [out-file (io/writer filename)]
       (csv/write-csv out-file rows))))
 
-(defn run
-  [start, end]
-  (->> project-ids
+(defn data->json
+  [filename data]
+  (io/make-parents filename)
+  (with-open [out-file (io/writer filename)]
+    (.write out-file (json/generate-string data))))
+
+(defn get-roster
+  [project-id]
+  (->> (get-project-roster project-id)
+       (map #(hash-map (get-in % [:person :id]) (get-in % [:person :name])))
+       (into {})))
+
+(defn sum-total-sprint-points
+  [tickets]
+  (->> tickets
+       (filter #(= (:current_state %) "accepted"))
+       (reduce #(+ %1 (:estimate %2 0)) 0)))
+
+(defn sum-dev-sprint-points
+  [tickets]
+  (->> tickets
+       (filter #(and (= (:current_state %) "accepted")
+                     (first (:owner_ids %))))
+       (reduce #(assoc %1 (:owned_by_id %2)
+                          (+ (get %1 (:owned_by_id %2) 0)
+                             (:estimate %2 0)))
+               {})))
+
+(defn sum-dev-sprint-tickets
+  [tickets]
+  (->> tickets
+       (filter #(and (= (:current_state %) "accepted")
+                     (first (:owner_ids %))))
+       (reduce #(assoc %1 (:owned_by_id %2)
+                          (+ (get %1 (:owned_by_id %2) 0) 1))
+               {})))
+
+(defn run-time-report
+  [start end outfile]
+  (->> all-project-ids
        (map #(get-tickets :project-id % :start start :end end))
        flatten
        (map #(map (fn [x] (assoc x :estimate (:estimate %)
@@ -115,7 +226,53 @@
        (reduce #(assoc-in %1 [(keyword (:name %2)) (keyword (str (:owner %2)))] (+ (get-in %1 [(keyword (:name %2)) (keyword (str (:owner %2)))] 0) (if (nil? (:estimate %2)) 1 (:estimate %2)))) {})
        (map #(into [] (map (fn [x] (vector (name (key %)) (name (key x)) (val x))) (val %))))
        (reduce into [])
-       (map #(vector (first %) (second %) (points->hours (nth % 2))))))
+       (map #(vector (first %) (second %) (points->hours (nth % 2))))
+       (data->csv outfile)))
+
+(defn run-sprint-dev-report
+  [project-id report outfile]
+  (let [sprints (->> (get-iterations :project-id project-id
+                                     :offset -5)
+                     (map #(hash-map (:number %) (case report
+                                                       :points (sum-dev-sprint-points (:stories %))
+                                                       :tickets (sum-dev-sprint-tickets (:stories %)))))
+                     (into {}))
+        result {"graph" {"title" (str "Sprint " (get (last sprints) "title") " " (name report) " Report") "total" true "refreshEveryNSeconds" (* 60 60 24) "datasequences" []}}
+        roster (get-roster project-id)
+        devs (->> (vals sprints)
+                  (into {})
+                  keys
+                  (map #(hash-map % (get roster %)))
+                  (into {}))]
+    (->> (map #(hash-map :title (val %)
+                         :color (get-color (val %))
+                         :datapoints (into [] (map (fn [x] (hash-map "title" (str (key x))
+                                                                     "value" (str (get (val x) (key %) 0)))) sprints))) devs)
+         (assoc-in result ["graph" "datasequences"])
+         (data->json outfile))))
+
+(defn run-sprint-team-report
+  [project-id outfile]
+  (let [sprints (->> (get-iterations :project-id project-id
+                                     :offset -5)
+                     (map #(hash-map (:number %) (sum-total-sprint-points (:stories %))))
+                     (into {})
+                     (map #(hash-map "title" (str (key %))
+                                     "value" (str (val %))))
+                     (into []))
+       result {"graph" {"title" (str "Sprint " (get (last sprints) "title") " Total Points Report") "refreshEveryNSeconds" (* 60 60 24) "type" "line" "datasequences" []}}]
+    (->> sprints
+         (hash-map "title" "Points Per Sprint"
+                   "datapoints")
+         (conj [])
+         (assoc-in result ["graph" "datasequences"])
+         (data->json outfile))))
+
+(defn run-sprint-reports
+  [project-id outdir]
+  (run-sprint-team-report project-id (str outdir "/team_points_per_sprint.json"))
+  (run-sprint-dev-report project-id :tickets (str outdir "/dev_tickets_per_sprint.json"))
+  (run-sprint-dev-report project-id :points (str outdir "/dev_points_per_sprint.json")))
 
 (defn process-date
   [datestr]
@@ -126,22 +283,21 @@
 
 (defn gen-outfile
   [start end]
-  (str "./pt-time-" start "-to-" end ".csv"))
+  (str "/pt-time-" start "-to-" end ".csv"))
 
 (def cli-options
   [["-h" "--help"]
    ["-v" "--verbose"]
+   ["-j" "--job JOB" "sprint or timesheet"
+    :default "timesheet"]
    ["-s" "--start START" "Start date: 2014-09-24"
-    :default nil
-    :validate [#(> (count (process-date %)) 2) "Invalid date format. Example: 2014-06-22"]]
+    :default nil]
    ["-e" "--end END" "End date: 2014-10-24"
-    :default nil
-    :validate [#(> (count (process-date %)) 2) "Invalid date format. Example: 2014-06-22"]]
+    :default nil]
    ["-p" "--prefix PREFIX" "Ticket label prefix."
     :default "tt-"]
-   ["-o" "--outfile FILE" "Output csv file."
-    :default nil
-    :validate [#(contains? #{"csv"} (last (clojure.string/split % #"\."))) "Must be .csv file."]]])
+   ["-o" "--outdir DIR" "Output directory."
+    :default "/tmp"]])
 
 (defn set-prefix
   [prefix]
@@ -162,13 +318,11 @@
     (if (:help flags)
         (do (println (:summary opts))
             (System/exit 0))
-        (do (when (or (nil? (:start flags))
-                      (nil? (:end flags)))
-                  (do (println "Required options are: start, end.")
-                      (System/exit 0)))
-            (let [outfile (or (:outfile flags)
-                              (gen-outfile (:start flags) (:end flags)))]
-              (->> (run (process-date (:start flags))
-                   (process-date (:end flags)))
-                   (data->csv outfile))
-              (println (str "Report saved to: " outfile)))))))
+        (if (= (:job flags) "sprint")
+            (doseq [[k v] {"/backend" 1114928 "/frontend" 1114116}]
+              (run-sprint-reports v (str (:outdir flags) k)))
+            (do (when (or (nil? (:start flags))
+                          (nil? (:end flags)))
+                      (do (println "Required options are: start, end.")
+                          (System/exit 0)))
+                (run-time-report (process-date (:start flags)) (process-date (:end flags)) (gen-outfile (:start flags) (:end flags))))))))
