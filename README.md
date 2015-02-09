@@ -3,7 +3,9 @@
 A quick Clojure project to hack out an automated way to get a few reports out of Pivotal Tracker.
 
 Specifically:
+
 1. Timesheet: Given a start date, end date and a list of project IDs, it returns a list of the tags and how many "hours" (points * a factor) each dev worked on them.
+
 2. Sprint Report: Generates chart data (JSON files) with number of total team points, and tickets and points per developer in a project for the last 5 sprints. The output is specifically coded to work with [Panic's iOS StatusBoard App](http://panic.com/statusboard/).
 
 ## Usage
@@ -25,7 +27,7 @@ Specifically:
 
 ## License
 
-Copyright © 2014 @thatmikeflynn
+Copyright © 2014 [@thatmikeflynn](http://twitter.com/thatmikeflynn)
 
 Distributed under the Eclipse Public License either version 1.0 or (at
 your option) any later version.
