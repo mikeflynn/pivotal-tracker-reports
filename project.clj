@@ -1,4 +1,4 @@
-(defproject pivotal-time-tracker "1.1"
+(defproject pivotal-time-tracker "2.0"
   :description "Generates a time report based on Pivotal Tracker tickets."
   :url "http://example.com/FIXME"
   :license {:name "Eclipse Public License"

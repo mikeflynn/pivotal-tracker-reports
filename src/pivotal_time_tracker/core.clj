@@ -7,9 +7,15 @@
             [clojure.tools.cli :refer [parse-opts]]
             [simple-time.core :as time]))
 
-(def token "a2a78107444c396b83864db22e31231c")
-(def all-project-ids [1114116, 1114928, 908458])
+(defn get-param [n]
+  (let [system_env (System/getenv n)
+        system_prop (System/getProperty n)]
+    (if-let [param (if system_env system_env system_prop)]
+      param
+      d)))
 
+(def token (get-param "PTT_TOKEN" false))
+(def #^{:dynamic true} *all-project-ids* [])
 (def #^{:dynamic true} *label-prefix* "tt-")
 (def #^{:dynamic true} *verbose* false)
 (defn alert [msg] (when *verbose* (println msg)))
@@ -212,7 +218,7 @@
 
 (defn run-time-report
   [start end outfile]
-  (->> all-project-ids
+  (->> *all-project-ids*
        (map #(get-tickets :project-id % :start start :end end))
        flatten
        (map #(map (fn [x] (assoc x :estimate (:estimate %)
@@ -288,6 +294,9 @@
 (def cli-options
   [["-h" "--help"]
    ["-v" "--verbose"]
+   ["-i" "--project-id PROJECT-ID" "The project id, or ids (comma separated)."
+    :default nil
+    :validate [#(not(empty? %)) "You must enter a project id to continue."]]
    ["-j" "--job JOB" "sprint or timesheet"
     :default "timesheet"]
    ["-s" "--start START" "Start date: 2014-09-24"
@@ -307,6 +316,10 @@
   [v]
   (alter-var-root (var *verbose*) (fn [_] v)))
 
+(defn set-project-id
+  [project-id]
+  (alter-var-root (var *project-ids*) (fn [_] project-id)))
+
 (defn -main [& args]
   (let [opts (parse-opts args cli-options)
         flags (:options opts)]
@@ -315,12 +328,13 @@
               (System/exit 0)))
     (set-prefix (:prefix flags))
     (set-verbose (:verbose flags))
+    (set-project-id (clojure.string/split (:prefix project-id "") #","))
     (if (:help flags)
         (do (println (:summary opts))
             (System/exit 0))
         (if (= (:job flags) "sprint")
-            (doseq [[k v] {"/backend" 1114928 "/frontend" 1114116}]
-              (run-sprint-reports v (str (:outdir flags) k)))
+            (doseq [p *project-ids*]
+              (run-sprint-reports p (str (:outdir flags) p)))
             (do (when (or (nil? (:start flags))
                           (nil? (:end flags)))
                       (do (println "Required options are: start, end.")
