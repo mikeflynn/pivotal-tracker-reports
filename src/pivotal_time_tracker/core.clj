@@ -12,11 +12,11 @@
         system_prop (System/getProperty n)]
     (if-let [param (if system_env system_env system_prop)]
       param
-      d)))
+      false)))
 
-(def token (get-param "PTT_TOKEN" false))
+(def token (get-param "PTT_TOKEN"))
 (def #^{:dynamic true} *all-project-ids* [])
-(def #^{:dynamic true} *label-prefix* "tt-")
+(def #^{:dynamic true} *label-prefix* "")
 (def #^{:dynamic true} *verbose* false)
 (defn alert [msg] (when *verbose* (println msg)))
 
@@ -228,7 +228,7 @@
                                                ((fn [x] (:name x 0))))))
                   (:labels %)))
        flatten
-       (filter #(.startsWith (:name %) *label-prefix*))
+       (filter #(.startsWith (:name % "") *label-prefix*))
        (reduce #(assoc-in %1 [(keyword (:name %2)) (keyword (str (:owner %2)))] (+ (get-in %1 [(keyword (:name %2)) (keyword (str (:owner %2)))] 0) (if (nil? (:estimate %2)) 1 (:estimate %2)))) {})
        (map #(into [] (map (fn [x] (vector (name (key %)) (name (key x)) (val x))) (val %))))
        (reduce into [])
@@ -289,13 +289,13 @@
 
 (defn gen-outfile
   [start end]
-  (str "/pt-time-" start "-to-" end ".csv"))
+  (str "pt-time-" start "-to-" end ".csv"))
 
 (def cli-options
   [["-h" "--help"]
    ["-v" "--verbose"]
-   ["-i" "--project-id PROJECT-ID" "The project id, or ids (comma separated)."
-    :default nil
+   ["-p" "--project-id PROJECT-ID" "The project id, or ids (comma separated)."
+    :default ""
     :validate [#(not(empty? %)) "You must enter a project id to continue."]]
    ["-j" "--job JOB" "sprint or timesheet"
     :default "timesheet"]
@@ -303,7 +303,7 @@
     :default nil]
    ["-e" "--end END" "End date: 2014-10-24"
     :default nil]
-   ["-p" "--prefix PREFIX" "Ticket label prefix."
+   ["-t" "--tag PREFIX" "Ticket label prefix."
     :default "tt-"]
    ["-o" "--outdir DIR" "Output directory."
     :default "/tmp"]])
@@ -318,7 +318,7 @@
 
 (defn set-project-id
   [project-id]
-  (alter-var-root (var *project-ids*) (fn [_] project-id)))
+  (alter-var-root (var *all-project-ids*) (fn [_] project-id)))
 
 (defn -main [& args]
   (let [opts (parse-opts args cli-options)
@@ -326,17 +326,19 @@
     (when (:errors opts)
           (do (println (:errors opts))
               (System/exit 0)))
-    (set-prefix (:prefix flags))
-    (set-verbose (:verbose flags))
-    (set-project-id (clojure.string/split (:prefix project-id "") #","))
+    (set-prefix (:prefix flags ""))
+    (set-verbose (:verbose flags false))
+    (set-project-id (clojure.string/split (:project-id flags "") #","))
     (if (:help flags)
         (do (println (:summary opts))
             (System/exit 0))
         (if (= (:job flags) "sprint")
-            (doseq [p *project-ids*]
-              (run-sprint-reports p (str (:outdir flags) p)))
+            (do
+              (when (empty? *all-project-ids*) (System/exit 0))
+              (doseq [p *all-project-ids*]
+                (run-sprint-reports p (str (:outdir flags) "/" p))))
             (do (when (or (nil? (:start flags))
                           (nil? (:end flags)))
                       (do (println "Required options are: start, end.")
                           (System/exit 0)))
-                (run-time-report (process-date (:start flags)) (process-date (:end flags)) (gen-outfile (:start flags) (:end flags))))))))
+                (run-time-report (process-date (:start flags)) (process-date (:end flags)) (str (:outdir flags) "/" (gen-outfile (:start flags) (:end flags)))))))))
