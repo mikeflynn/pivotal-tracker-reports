@@ -12,6 +12,8 @@ Specifically:
 
 `lein uberjar`
 
+`export PTT_TOKEN=[Pivotal Tracker API Token]`
+
 `java -jar target/pivotal-time-tracker-2.0-standalone.jar -h`
 
 ```
